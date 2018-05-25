@@ -1,3 +1,6 @@
 [submodule "chif"]
 	path = chif
 	url = https://github.com/alfret/chif
+[submodule "argparse"]
+	path = argparse
+	url = https://github.com/cofyc/argparse

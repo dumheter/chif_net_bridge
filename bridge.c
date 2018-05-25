@@ -1,12 +1,16 @@
-#define CHIF_NET_IMPLEMENTATION
-#include "chif/chif_net.h"
-
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <time.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <getopt.h>
+
+#define CHIF_NET_IMPLEMENTATION
+#include "chif/chif_net.h"
+
+#include "argparse/argparse.h"
 
 // ============================================================ //
 // prototypes
@@ -19,10 +23,20 @@ void serve_bridge(chif_net_socket con_sock, chif_net_socket target_sock);
 // structs
 // ============================================================ //
 
+typedef uint32_t tcp_user_timeout_type;
+
 struct bridge_ctx {
   chif_net_socket cli_sock;
   const char* target_ip;
   uint16_t target_port;
+  tcp_user_timeout_type tcp_user_timeout;
+};
+
+struct bridge_options {
+  const char* target_ip;
+  uint16_t target_port;
+  uint16_t listen_port;
+  tcp_user_timeout_type tcp_user_timeout;
 };
 
 // ============================================================ //
@@ -51,7 +65,7 @@ void report_success_or_die(chif_net_result res, char* msg)
  * @param target_ip Ip address of the bridge target.
  * @param target_port Port of the bridge target.
  */
-void connection_server(uint16_t listen_port, const char* target_ip, uint16_t target_port)
+void connection_server(struct bridge_options* opts)
 {
   printf("\n~ connection_server ~\n");
   chif_net_socket sock;
@@ -64,7 +78,7 @@ void connection_server(uint16_t listen_port, const char* target_ip, uint16_t tar
   res = chif_net_set_reuse_addr(sock, true);
   report_success_or_die(res, "[connection_server] reuse addr");
 
-  res = chif_net_bind(sock, listen_port, fam);
+  res = chif_net_bind(sock, opts->listen_port, fam);
   report_success_or_die(res, "[connection_server] bind server");
 
   res = chif_net_listen(sock, CHIF_NET_DEFAULT_MAXIMUM_BACKLOG);
@@ -83,8 +97,9 @@ void connection_server(uint16_t listen_port, const char* target_ip, uint16_t tar
       pthread_t thread;
       struct bridge_ctx* bridge_ctx = malloc(sizeof(struct bridge_ctx));
       bridge_ctx->cli_sock = cli_sock;
-      bridge_ctx->target_ip = target_ip;
-      bridge_ctx->target_port = target_port;
+      bridge_ctx->target_ip = opts->target_ip;
+      bridge_ctx->target_port = opts->target_port;
+      bridge_ctx->tcp_user_timeout = opts->tcp_user_timeout;
       int res = pthread_create(&thread, NULL, init_bridge, (void*)(bridge_ctx));
       if (res) {
         printf("[conenction_server] failed to creat thread\n");
@@ -140,6 +155,14 @@ void* init_bridge(void* void_bridge_ctx)
 
   res = chif_net_connect(target_sock, target_addr);
   report_success_or_return(res, "connecting to remote");
+
+  if (bridge_ctx->tcp_user_timeout) {
+    res = chif_net_tcp_set_user_timeout(bridge_ctx->cli_sock, bridge_ctx->tcp_user_timeout);
+    report_success_or_return(res, "setting user timeout on cli sock");
+
+    res = chif_net_tcp_set_user_timeout(target_sock, bridge_ctx->tcp_user_timeout);
+    report_success_or_return(res, "setting user timeout on target sock");
+  }
 
   serve_bridge(bridge_ctx->cli_sock, target_sock);
 
@@ -202,23 +225,68 @@ void serve_bridge(chif_net_socket con_sock, chif_net_socket target_sock)
   printf("  [%d] ~ bridge closed ~\n", do_not_use);
 }
 
+void display_help()
+{
+  fprintf(stderr, "usage: ...\n");
+}
+
 // ============================================================ //
 // main
 // ============================================================ //
 
-int main()
+static const char *const usage[] = {
+  "test_argparse [options] [[--] args]",
+  "test_argparse [options]",
+  NULL,
+};
+
+int main(int argc, const char** argv)
 {
+  char* target_ip = NULL;
+  uint16_t target_port = 0;
+  uint16_t listen_port = 0;
+  uint32_t timeout = 0;
+
+  struct argparse_option options[] = {
+    OPT_HELP(),
+    OPT_GROUP("Bridge Target Options"),
+    OPT_STRING('i', "ip", &target_ip, "Bridge target ip", NULL, 0, 0),
+    OPT_INTEGER('p', "port", &target_port, "Bridge target port", NULL, 0, 0),
+    OPT_GROUP("Server Options"),
+    OPT_INTEGER('l', "listen", &listen_port, "Listen port", NULL, 0, 0),
+    OPT_GROUP("General Options"),
+    OPT_INTEGER('t', "tcp-user-timeout", &timeout, "Linux only feature. tcp user timeout", NULL, 0, 0),
+    OPT_END(),
+  };
+
+  struct argparse argparse;
+  argparse_init(&argparse, options, usage, 0);
+  argparse_describe(&argparse, "\nTODO: write description", "\nTODO: Write additional info here");
+  argc = argparse_parse(&argparse, argc, argv);
+
   chif_net_startup(); // needed if on windows
 
-  const uint16_t serve_port = 1337;
-  const char* target_ip = "192.168.234.130";
-  const uint16_t target_port = 1337;
-  printf("~ bridge ~\n\nWill bridge connections to %s:%d\n", target_ip, target_port);
+  const uint16_t dlisten_port = 1337;
+  const char* dtarget_ip = "192.168.208.128";
+  const uint16_t dtarget_port = 1337;
+  printf("~ bridge ~\n\n~ options ~\n");
 
-  connection_server(serve_port, target_ip, target_port);
+  printf("bridging to %s:%d\n", target_ip != NULL ? target_ip : dtarget_ip,
+         target_port != 0 ? target_port : dtarget_port);
+  printf("listening on port %d\n", listen_port != 0 ? listen_port : dlisten_port);
+  if (timeout != 0) printf("tcp_user_timeout: %d\n", timeout);
+
+  struct bridge_options bridge_opt = {
+    .target_ip = target_ip != NULL ? target_ip : dtarget_ip,
+    .target_port = target_port != 0 ? target_port : dtarget_port,
+    .listen_port = listen_port != 0 ? listen_port : dlisten_port,
+    .tcp_user_timeout = timeout
+  };
+
+  connection_server(&bridge_opt);
 
   printf("~ shutting down ~\n");
   chif_net_shutdown(); // needed if on windwos
 
-  return 0;
+    return 0;
 }
