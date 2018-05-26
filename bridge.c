@@ -120,30 +120,30 @@ void connection_server(struct bridge_options* opts)
 void* init_bridge(void* void_bridge_ctx)
 {
   struct bridge_ctx* bridge_ctx = (struct bridge_ctx*)void_bridge_ctx;
+  chif_net_socket target_sock = -1;
 
   char cli_ip[CHIF_NET_IPVX_STRING_LENGTH];
   chif_net_result res1 = chif_net_get_peer_name(bridge_ctx->cli_sock, cli_ip, CHIF_NET_IPVX_STRING_LENGTH);
   uint16_t cli_port;
   chif_net_result res2 = chif_net_get_peer_port(bridge_ctx->cli_sock, &cli_port);
   if (res1 && res2) {
-    printf("  [%d] [bridge_init] new client connected from %s:%d\n",
-           bridge_ctx->cli_sock, cli_ip, cli_port);
+    printf("  [%d<->%d] [bridge_init] new client connected from %s:%d\n",
+           bridge_ctx->cli_sock, target_sock, cli_ip, cli_port);
   }
  else {
-   printf("  [%d] [bridge_init] new client connected from unknown\n", bridge_ctx->cli_sock);
+   printf("  [%d<->%d] [bridge_init] new client connected from unknown\n", bridge_ctx->cli_sock, target_sock);
  }
 
 #define report_success_or_return(res, msg) {                            \
     if (res == CHIF_NET_RESULT_SUCCESS)                                 \
-      printf("  [%d] [bridge_init] %s\n", bridge_ctx->cli_sock, msg);   \
+      printf("  [%d<->%d] [bridge_init] %s\n", bridge_ctx->cli_sock, target_sock, msg); \
     else {                                                              \
-      printf("  [%d] [bridge_init] FATAL %d: %s\n", bridge_ctx->cli_sock, res, msg); \
+      printf("  [%d<->%d] [bridge_init] FATAL %d: %s\n", bridge_ctx->cli_sock, target_sock, res, msg); \
       chif_net_close_socket(&(bridge_ctx->cli_sock));                   \
       chif_net_close_socket(&target_sock);                              \
       return (int*)1; }                                                 \
 }
 
-  chif_net_socket target_sock;
   chif_net_protocol proto = CHIF_NET_PROTOCOL_TCP;
   chif_net_address_family fam = CHIF_NET_ADDRESS_FAMILY_IPV4;
 
@@ -156,6 +156,18 @@ void* init_bridge(void* void_bridge_ctx)
 
   res = chif_net_connect(target_sock, target_addr);
   report_success_or_return(res, "connecting to remote");
+
+  char target_ip[CHIF_NET_IPVX_STRING_LENGTH];
+  chif_net_result tres1 = chif_net_get_peer_name(target_sock, target_ip, CHIF_NET_IPVX_STRING_LENGTH);
+  uint16_t target_port;
+  chif_net_result tres2 = chif_net_get_peer_port(target_sock, &target_port);
+  if (tres1 && tres2) {
+    printf("  [%d<->%d] [bridge_init] bridge connected to %s:%d\n",
+           bridge_ctx->cli_sock, target_sock, target_ip, target_port);
+  }
+  else {
+    printf("  [%d<->%d] [bridge_init] bridge connected to unknown\n", bridge_ctx->cli_sock, target_sock);
+  }
 
   if (bridge_ctx->tcp_user_timeout) {
     res = chif_net_tcp_set_user_timeout(bridge_ctx->cli_sock, bridge_ctx->tcp_user_timeout);
@@ -177,7 +189,7 @@ void* init_bridge(void* void_bridge_ctx)
  */
 void serve_bridge(chif_net_socket con_sock, chif_net_socket target_sock)
 {
-  printf("  [%d] ~ serve bridge active ~\n", con_sock);
+  printf("  [%d<->%d] ~ serve bridge active ~\n", con_sock, target_sock);
 
   bool bridge_open = true;
   enum buf_size { buf_size = 4096 };
@@ -185,7 +197,7 @@ void serve_bridge(chif_net_socket con_sock, chif_net_socket target_sock)
   ssize_t sent_bytes, read_bytes;
 
 #define report_if_fail(msg) if (res != CHIF_NET_RESULT_SUCCESS)         \
-  {bridge_open=false;printf("  [%d] [serve_bridge] failed: %s\n", con_sock, msg);break;}
+  {bridge_open=false;printf("  [%d<->%d] [serve_bridge] failed: %s\n", con_sock, target_sock, msg);break;}
 
   while (bridge_open) {
     bool should_sleep = true;
@@ -214,16 +226,15 @@ void serve_bridge(chif_net_socket con_sock, chif_net_socket target_sock)
       struct timespec sleeptime = {.tv_sec = 0, .tv_nsec = 10000000};
       int ures = nanosleep(&sleeptime, NULL);
       if (ures != 0) {
-        printf("  [%d] [serve_bridge] nanosleep returned %d\n", con_sock, ures);
+        printf("  [%d<->%d] [serve_bridge] nanosleep returned %d\n", con_sock, target_sock, ures);
       }
     }
   }
 
-  chif_net_socket do_not_use = con_sock;
+  printf("  [%d<->%d] ~ bridge closed ~\n", con_sock, target_sock);
+
   chif_net_close_socket(&con_sock);
   chif_net_close_socket(&target_sock);
-
-  printf("  [%d] ~ bridge closed ~\n", do_not_use);
 }
 
 void display_help()
