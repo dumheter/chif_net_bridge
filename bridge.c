@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <getopt.h>
+#include <limits.h>
 
 #define CHIF_NET_IMPLEMENTATION
 #include "chif/chif_net.h"
@@ -243,8 +244,8 @@ static const char *const usage[] = {
 int main(int argc, const char** argv)
 {
   char* target_ip = NULL;
-  uint16_t target_port = 0;
-  uint16_t listen_port = 0;
+  uint32_t target_port = 0;
+  uint32_t listen_port = 0;
   uint32_t timeout = 0;
 
   struct argparse_option options[] = {
@@ -263,6 +264,18 @@ int main(int argc, const char** argv)
   argparse_init(&argparse, options, usage, 0);
   argparse_describe(&argparse, "\nTODO: write description", "\nTODO: Write additional info here");
   argc = argparse_parse(&argparse, argc, argv);
+
+  if (target_port > USHRT_MAX) {
+    fprintf(stderr, "attempted to set --port=%d, but maximum port value is %d\n",
+            target_port, USHRT_MAX);
+    exit(1);
+  }
+
+  if (listen_port > USHRT_MAX) {
+    fprintf(stderr, "attempted to set --listen=%d, but maximum port value is %d\n",
+            listen_port, USHRT_MAX);
+    exit(1);
+  }
 
   chif_net_startup(); // needed if on windows
 
